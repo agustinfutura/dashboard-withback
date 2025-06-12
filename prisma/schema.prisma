@@ -1,0 +1,376 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  role          Role      @default(USER)
+  accounts      Account[]
+  sessions      Session[]
+  
+  // Relaciones cuando el usuario es un cliente
+  clientProfile     Client?
+  assignedAgent    Agent?     @relation("ClientAgent")
+  subscriptions    Subscription[]
+  paymentPlans     PaymentPlan[]
+  tickets          Ticket[]    @relation("ClientTickets")
+  
+  // Relaciones cuando el usuario es un agente
+  agentProfile     Agent?
+  assignedClients  Client[]   @relation("AgentClients")
+  assignedTickets  Ticket[]   @relation("AgentTickets")
+  
+  // Relaciones cuando el usuario es un técnico
+  assignedTechTickets Ticket[] @relation("TechTickets")
+}
+
+model Account {
+  id                 String  @id @default(cuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String?  @db.Text
+  access_token       String?  @db.Text
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String?  @db.Text
+  session_state      String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+enum Role {
+  ADMIN
+  AGENT
+  TECHNICIAN
+  USER
+}
+
+enum ClientStatus {
+  ACTIVE
+  INACTIVE
+  DELINQUENT
+  CANCELLED
+}
+
+model Client {
+  id          String        @id @default(cuid())
+  userId      String        @unique
+  status      ClientStatus  @default(ACTIVE)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  agentId     String?
+  
+  // Relaciones
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agent       User?         @relation("AgentClients", fields: [agentId], references: [id])
+  payments    Payment[]
+  documents   Document[]    @relation("ClientDocuments")
+
+  @@index([agentId])
+}
+
+model Agent {
+  id          String        @id @default(cuid())
+  userId      String        @unique
+  commission  Float         @default(0)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  
+  // Relaciones
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clients     User[]        @relation("ClientAgent")
+  kpis        AgentKPI[]
+  documents   Document[]    @relation("AgentDocuments")
+}
+
+model AgentKPI {
+  id          String        @id @default(cuid())
+  agentId     String
+  month       DateTime
+  sales       Float         @default(0)
+  retention   Float         @default(0)
+  satisfaction Float        @default(0)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  
+  // Relaciones
+  agent       Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+}
+
+enum SubscriptionType {
+  MONTHLY
+  ANNUAL
+  CUSTOM
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  OVERDUE
+  CANCELLED
+  PAUSED
+}
+
+model Subscription {
+  id          String             @id @default(cuid())
+  userId      String
+  type        SubscriptionType   @default(MONTHLY)
+  status      SubscriptionStatus @default(ACTIVE)
+  startDate   DateTime           @default(now())
+  endDate     DateTime?
+  price       Float
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  
+  // Relaciones
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invoices    Invoice[]
+
+  @@index([userId])
+}
+
+model PaymentPlan {
+  id          String      @id @default(cuid())
+  userId      String
+  name        String
+  totalAmount Float
+  remainingAmount Float
+  installments Int
+  startDate   DateTime    @default(now())
+  nextPaymentDate DateTime
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  // Relaciones
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payments    Payment[]
+
+  @@index([userId])
+}
+
+enum PaymentType {
+  SUBSCRIPTION
+  PAYMENT_PLAN
+  CAPITAL_CONTRIBUTION
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+model Payment {
+  id          String        @id @default(cuid())
+  clientId    String
+  amount      Float
+  type        PaymentType
+  status      PaymentStatus @default(PENDING)
+  paymentDate DateTime      @default(now())
+  paymentPlanId String?
+  description String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  
+  // Relaciones
+  client      Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  paymentPlan PaymentPlan?  @relation(fields: [paymentPlanId], references: [id])
+
+  @@index([clientId])
+  @@index([paymentPlanId])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+model Invoice {
+  id          String        @id @default(cuid())
+  subscriptionId String
+  invoiceNumber String       @unique
+  amount      Float
+  status      InvoiceStatus @default(DRAFT)
+  issueDate   DateTime      @default(now())
+  dueDate     DateTime
+  paidDate    DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  
+  // Relaciones
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId])
+}
+
+enum ExpenseCategory {
+  SALARIES
+  SERVICES
+  SOFTWARE
+  MARKETING
+  MAINTENANCE
+  OTHER
+}
+
+model Expense {
+  id          String          @id @default(cuid())
+  name        String
+  amount      Float
+  category    ExpenseCategory
+  isRecurring Boolean         @default(false)
+  dueDate     DateTime?
+  paidDate    DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+}
+
+enum AccountType {
+  BANK
+  CRYPTO
+  OTHER
+}
+
+model Account {
+  id          String      @id @default(cuid())
+  name        String
+  type        AccountType
+  balance     Float       @default(0)
+  currency    String
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+enum CapitalContributionType {
+  PARTNER_A
+  PARTNER_B
+}
+
+model CapitalContribution {
+  id          String                  @id @default(cuid())
+  amount      Float
+  type        CapitalContributionType
+  date        DateTime                @default(now())
+  description String?
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+}
+
+enum DocumentType {
+  CONTRACT
+  INVOICE
+  REPORT
+  LEGAL
+  OTHER
+}
+
+model Document {
+  id          String        @id @default(cuid())
+  name        String
+  type        DocumentType
+  url         String
+  clientId    String?
+  agentId     String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  
+  // Relaciones
+  client      Client?       @relation("ClientDocuments", fields: [clientId], references: [id])
+  agent       Agent?        @relation("AgentDocuments", fields: [agentId], references: [id])
+
+  @@index([clientId])
+  @@index([agentId])
+}
+
+enum TicketStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  WAITING_CLIENT
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Ticket {
+  id          String         @id @default(cuid())
+  title       String
+  description String
+  clientId    String
+  assignedAgentId String?
+  assignedTechId String?
+  status      TicketStatus   @default(OPEN)
+  priority    TicketPriority @default(MEDIUM)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  
+  // Relaciones
+  client      User           @relation("ClientTickets", fields: [clientId], references: [id])
+  agent       User?          @relation("AgentTickets", fields: [assignedAgentId], references: [id])
+  technician  User?          @relation("TechTickets", fields: [assignedTechId], references: [id])
+  notes       TicketNote[]
+
+  @@index([clientId])
+  @@index([assignedAgentId])
+  @@index([assignedTechId])
+}
+
+model TicketNote {
+  id          String      @id @default(cuid())
+  ticketId    String
+  content     String
+  isInternal  Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  // Relaciones
+  ticket      Ticket      @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+}
